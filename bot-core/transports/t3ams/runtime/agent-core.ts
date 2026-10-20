@@ -30,7 +30,7 @@ import {
 } from "@t3ams/bcts";
 import type { HostLocalStorage } from "@t3ams-real/host";
 import type { StatementTransport } from "@parity/product-sdk-statement-store-real";
-import type { PolkadotSigner } from "polkadot-api";
+import { getTxCreator } from "polkadot-api/tx-creator";
 
 import { installAgentHost } from "./agent-host.ts";
 
@@ -110,8 +110,10 @@ export interface T3amsAgentOptions {
   readonly storage: HostLocalStorage;
   /** Opens a Statement Store connection; called again whenever the app drops a dead one. */
   readonly createStatementTransport: () => StatementTransport;
-  /** Signs extrinsics as the bot account (identity attestation on the registry). */
-  readonly txSigner: PolkadotSigner;
+  /** Raw sr25519 signature by the bot account: the registry attestation and
+   *  its transaction. The runtime builds the checkout's own transaction signer
+   *  from it, so the bot's polkadot-api version never has to match. */
+  readonly signRaw: (bytes: Uint8Array) => Uint8Array | Promise<Uint8Array>;
   /** Deterministic 32-byte entropy for a context, derived from the bot seed. */
   readonly deriveEntropy: (context: Uint8Array) => Promise<Uint8Array>;
   readonly onMention: (event: T3amsMention) => void;
@@ -221,11 +223,12 @@ function senderNameIn(docs: readonly (WorkspaceStateDoc | null)[], message: Chat
 
 export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsAgent> {
   const log = options.log ?? (() => {});
+  const txSigner = getTxCreator(options.accountPublicKey, "Sr25519", options.signRaw);
   installAgentHost({
     deriveEntropy: options.deriveEntropy,
     storage: options.storage,
     createStatementTransport: options.createStatementTransport,
-    signRootBytes: (payload) => options.txSigner.signBytes(payload),
+    signRootBytes: (payload) => txSigner.signBytes(payload),
   });
   setTopicNamespace(options.namespace);
   const manager = createSmartContractIdentityVerificationManager();
@@ -247,13 +250,13 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
     adapter: {
       mode: "sdk",
       getPublicKey: () => options.accountPublicKey,
-      signRaw: (data) => options.txSigner.signBytes(data),
+      signRaw: async (data) => options.signRaw(data),
       deriveEncryptionMaterial: () => options.deriveEntropy(new TextEncoder().encode("t3ams:encryption:v1")),
       getAccountAddress: () => accountAddress,
       getAccountInfo: async () => ({ identifierKey: null, liteUsername: options.username }),
       isReady: () => true,
     },
-    txSigner: options.txSigner,
+    txSigner,
     xidHex: selfXid,
     accountAddress,
     username: options.username,

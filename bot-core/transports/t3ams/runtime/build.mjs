@@ -72,6 +72,8 @@ export async function buildT3amsAgentRuntime({
     resolve: {
       alias: [
         ...aliases,
+        // The runtime is the checkout's code: its polkadot-api, not the bot's.
+        { find: /^(polkadot-api|@polkadot-api\/[^/]+)(\/.*)?$/, replacement: `${path.join(root, "node_modules")}/$1$2` },
         { find: /^@t3ams\/host$/, replacement: path.join(HERE, "host-shim.ts") },
         { find: /^@t3ams-real\/host$/, replacement: spa("packages/host/src/index.ts") },
         { find: /^@parity\/product-sdk-statement-store$/, replacement: path.join(HERE, "statement-store-shim.ts") },
@@ -136,6 +138,9 @@ export function typecheckT3amsAgentRuntime({ spaRoot, include = [path.join(HERE,
           ...spaConfig.compilerOptions.paths,
           "@t3ams-real/host": spaConfig.compilerOptions.paths["@t3ams/host"],
           "@parity/product-sdk-statement-store-real": ["node_modules/@parity/product-sdk-statement-store/dist/index.d.ts"],
+          "polkadot-api": ["node_modules/polkadot-api"],
+          "polkadot-api/*": ["node_modules/polkadot-api/*"],
+          "@polkadot-api/*": ["node_modules/@polkadot-api/*"],
           ...paths,
         },
       },

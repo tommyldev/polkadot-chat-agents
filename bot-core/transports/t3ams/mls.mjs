@@ -18,7 +18,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { getPolkadotSigner } from "polkadot-api/signer";
 import { ss58Address } from "@polkadot-labs/hdkd-helpers";
 
 import { createAgentRuntime } from "../../lib/agent-runtime.mjs";
@@ -111,7 +110,6 @@ if (engine != null) fs.mkdirSync(aiWorkspace, { recursive: true, mode: 0o700 });
 
 const material = deriveT3amsIdentityFromSeed(seed);
 const wallet = deriveSr25519PairFromSeed(seed, "//wallet");
-const txSigner = getPolkadotSigner(wallet.publicKey, "Sr25519", (bytes) => wallet.sign(bytes));
 const runtime = await import(runtimeEntry);
 
 // Host entropy, the way a wallet host derives it: per context, from the bot
@@ -202,7 +200,7 @@ agent = await runtime.startT3amsAgent({
   storage: createT3amsFileKv(path.join(stateDir, "t3ams-kv")),
   createStatementTransport: () =>
     createT3amsStatementTransport({ endpoints: peopleEndpointsFor(endpoint, profile?.id ?? null), walletPair: wallet }),
-  txSigner,
+  signRaw: (bytes) => wallet.sign(bytes),
   deriveEntropy,
   log,
   onMention(mention) {

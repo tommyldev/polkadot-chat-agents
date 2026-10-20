@@ -2757,40 +2757,6 @@ async function cmdT3ams(args, flags = {}) {
     fail(`That checkout has no dependencies installed yet. Run (cd ${wsRoot} && npm install) once, then re-run this command.`);
   }
 
-  step("Building the T3ams SDK (@t3ams/bcts)…");
-  const build = spawnSync("npm", ["run", "build"], { cwd: bctsDir, encoding: "utf8" });
-  if (build.status !== 0) {
-    const tail = `${build.stdout ?? ""}\n${build.stderr ?? ""}`.trim().split("\n").slice(-12).join("\n  ");
-    fail(`The @t3ams/bcts build failed:\n  ${tail}`);
-  }
-
-  const packDir = fs.mkdtempSync(path.join(os.tmpdir(), "pca-bcts-"));
-  try {
-    const pack = spawnSync("npm", ["pack", "--pack-destination", packDir], { cwd: bctsDir, encoding: "utf8" });
-    const tarballName = (pack.stdout ?? "").trim().split("\n").at(-1);
-    if (pack.status !== 0 || !tarballName?.endsWith(".tgz")) {
-      fail(`Could not pack @t3ams/bcts: ${(pack.stderr ?? "").trim().split("\n").at(-1) ?? "npm pack failed"}`);
-    }
-
-    step("Installing it into bot-core…");
-    // --no-save on purpose: the tarball isn't retrievable from the registry, so
-    // recording it as a dependency would break npm ci for everyone else.
-    // --ignore-scripts: the tarball is already built, and one of its
-    // dependencies (@blockchaincommons/dcbor) ships an install-time script that
-    // references a file missing from its own package, which aborts the install.
-    const install = spawnSync(
-      "npm",
-      ["--prefix", HERE, "install", "--no-save", "--package-lock=false", "--ignore-scripts", path.join(packDir, tarballName)],
-      { encoding: "utf8" },
-    );
-    if (install.status !== 0) {
-      const tail = (install.stderr ?? "").trim().split("\n").slice(-6).join("\n  ");
-      fail(`Could not install the SDK into ${HERE}:\n  ${tail}`);
-    }
-  } finally {
-    fs.rmSync(packDir, { recursive: true, force: true });
-  }
-
   step("Building the T3ams agent runtime (the app's MLS messaging stack, headless)…");
   try {
     typecheckT3amsAgentRuntime({ spaRoot: wsRoot });
@@ -2805,13 +2771,8 @@ async function cmdT3ams(args, flags = {}) {
     fail(`The T3ams agent runtime build failed: ${String(error?.message ?? error).split("\n").slice(0, 12).join("\n  ")}`);
   }
 
-  // Importing is the real requirement (same check deploy uses): a packed SDK
-  // whose transitive dependency fails to load must fail here, not at run time.
-  const check = await inspectT3amsSdkForDeploy("t3ams");
-  if (!check.ok) fail(check.message);
-  const version = JSON.parse(fs.readFileSync(path.join(HERE, "node_modules", "@t3ams", "bcts", "package.json"), "utf8")).version;
-  ok(`T3ams SDK ready (@t3ams/bcts ${version}). pca run and pca deploy will pick it up from here.`);
-  note("Re-run this command after updating the T3ams checkout, or after npm ci in bot-core.");
+  ok("T3ams agent runtime ready. pca run and pca deploy will pick it up from here.");
+  note("Re-run this command after updating the T3ams checkout.");
 }
 
 function usage() {

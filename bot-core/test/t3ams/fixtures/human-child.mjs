@@ -7,7 +7,6 @@
 
 import path from "node:path";
 import { ss58Address } from "@polkadot-labs/hdkd-helpers";
-import { getPolkadotSigner } from "polkadot-api/signer";
 import { deriveSr25519PairFromSeed } from "../../../vendor/lib/wallet-keys.mjs";
 import { botSeedFromHex, deriveT3amsIdentityFromSeed } from "../../../transports/t3ams/t3ams-identity.mjs";
 import { createT3amsFileKv } from "../../../transports/t3ams/file-kv.mjs";
@@ -29,7 +28,7 @@ const human = await startHuman({
   namespace: NAMESPACE,
   storage: createT3amsFileKv(STATE_DIR),
   createStatementTransport: () => createT3amsStatementTransport({ endpoints: [ENDPOINT], walletPair: wallet }),
-  txSigner: getPolkadotSigner(wallet.publicKey, "Sr25519", (bytes) => wallet.sign(bytes)),
+  signRaw: (bytes) => wallet.sign(bytes),
   deriveEntropy: async (context) => new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([...seed, ...context]))),
   log: () => {},
 });
