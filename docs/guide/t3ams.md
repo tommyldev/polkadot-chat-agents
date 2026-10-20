@@ -64,6 +64,19 @@ checkout's messaging code, compiled.
   own at start (`T3AMS_IDENTITY_PUBLISHED`). The write is an Asset Hub
   transaction paid by the bot's account, so that account needs a little PAS on
   Asset Hub. Set `BOT_T3AMS_PUBLISH_IDENTITY=0` to skip it.
+  On paseo-next-v2 the web3-citizenship repo's `apps/cli/scripts/fund-ah.ts`
+  sends PAS from the `//Alice` dev account:
+  `TARGET=<bot ss58> AMOUNT=20000000000 bun run scripts/fund-ah.ts`.
+
+## Testing against a local T3ams dev host
+
+`npm run dev:host` in the T3ams checkout runs the app against a local signing
+host. It overrides the topic namespace to
+`truapi-dev:<network>:<product>` (`truapi-dev:paseo-next-v2:t3ams-spa.paseo`
+by default), so run the bot with that `BOT_T3AMS_TOPIC_NAMESPACE`. The app
+reads key attestations only when `VITE_T3AMS_REGISTRY_ADDRESS` is set for the
+dev host; without it every peer, the bot included, stays "Unverified" and DMs
+fall back to the legacy carrier, which the bot refuses.
 
 ## State
 
@@ -91,4 +104,5 @@ and persistent, and treat backups as secrets.
 | `BOT_T3AMS_DISPLAY_NAME` | Name shown in T3ams; defaults to the username. |
 | `BOT_T3AMS_PUBLISH_IDENTITY` | `0` skips publishing the key attestation at start. |
 | `BOT_T3AMS_RUNTIME` | A runtime bundle other than the one `pca t3ams setup` built. |
+| `BOT_T3AMS_LOG_LEVEL` | Log level baked into the runtime at `pca t3ams setup` (`info`; `debug` for the app's MLS and DM traces). |
 | `BOT_REPLY_CHUNK_BYTES` | Longest single message; longer answers are split. |

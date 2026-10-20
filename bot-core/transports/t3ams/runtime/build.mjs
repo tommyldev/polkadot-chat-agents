@@ -67,6 +67,8 @@ export async function buildT3amsAgentRuntime({
       "import.meta.env.VITE_T3AMS_COMMIT": JSON.stringify("agent"),
       "import.meta.env.VITE_T3AMS_SDK_VERSIONS": JSON.stringify("{}"),
       "import.meta.env.VITE_SENTRY_DSN": JSON.stringify(""),
+      // The bot's log level, from the operator's environment at build time.
+      "import.meta.env.VITE_LOG_LEVEL": JSON.stringify(process.env.BOT_T3AMS_LOG_LEVEL ?? "info"),
     },
     plugins: [coreCryptoIdbHook()],
     resolve: {
