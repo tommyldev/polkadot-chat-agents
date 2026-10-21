@@ -170,7 +170,7 @@ const NODE_IMAGE = "node:22.22.0-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048
 const HERMES_IMAGE = "nousresearch/hermes-agent@sha256:9c841866021c54c4596849f6135717e8a4d52ba510b7f52c50aef1de1a283973";
 // Cap container log growth on a VPS (json-file grows unbounded by default).
 const LOG_OPTS = `    logging:\n      driver: json-file\n      options: { max-size: "10m", max-file: "3" }\n`;
-const BRAINS = ["echo", "claude", "codex", "opencode", "kimi", "parity", "bridge"];
+const BRAINS = ["echo", "claude", "codex", "opencode", "kimi", "parity", "feedback", "bridge"];
 const DEFAULT_TRANSPORT = "polkadot-app";
 const TRANSPORTS = [DEFAULT_TRANSPORT, "t3ams"];
 // Brains that call a model and therefore spend your quota — never left open by default.
@@ -2778,7 +2778,7 @@ async function cmdT3ams(args, flags = {}) {
 function usage() {
   console.log(`pca — Polkadot Chat Agents
 
-  pca create <botname> [--brain echo|claude|codex|opencode|kimi|parity|bridge] [--transport polkadot-app|t3ams] [--owner <your username or address>] [--public] [--network devnet] [--username name]
+  pca create <botname> [--brain echo|claude|codex|opencode|kimi|parity|feedback|bridge] [--transport polkadot-app|t3ams] [--owner <your username or address>] [--public] [--network devnet] [--username name]
   pca register <name> [--again]        finish/retry registration; --again re-registers a bot the chain forgot
                                        (a reset or a migration; the old number is tried first, then a new one)
   pca run <name> [--model <m>] [--allowed-tools <read,write,bash,web,subagents|all>] [--tool-scope workspace|container] [--greet]

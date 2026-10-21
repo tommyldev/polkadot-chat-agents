@@ -49,6 +49,37 @@ an `init` line with the session id, optional `stream_event` text deltas, an
 speaks that and pca runs it as the brain, with the same session resume,
 placeholders, live replies and in-chat commands.
 
+## The `feedback` brain (T3ams only)
+
+`--brain feedback` turns a T3ams agent into a bug-report intake. A person
+describes a problem in a DM or by mentioning the agent in a channel; the agent
+asks what a developer needs (where, expected vs actual, steps, how often,
+platform), one or two questions at a time, then asks for their **client info**.
+T3ams shows that request as a consent card: the person can preview the report
+(app and SDK versions, network, host capabilities, app state, recent journeys
+and log lines — redacted on their device, never key material, message text or
+other people's names) and share it or decline. The agent then shows the issue
+it would file and files it when they say yes, replying with the link.
+
+Issues follow `.github/ISSUE_TEMPLATE/bug_report.yml` of the target repo
+(Summary, Steps to Reproduce, Expected, Actual, Environment, Logs in a
+collapsed block, Additional Context) and carry `bug`, `lives-in:t3ams` and an
+`area:*` label when the repo defines them.
+
+Configuration, all read from files or plain settings:
+
+| Variable | Meaning |
+| --- | --- |
+| `BOT_FEEDBACK_REPO` | `owner/name` to file into. Unset: the agent drafts but cannot file. |
+| `BOT_GITHUB_TOKEN_FILE` | File holding a token with `issues: write` on that repo (default `~/.config/pca/github-token`). |
+| `BOT_PARITY_PROXY_KEYFILE`, `BOT_PARITY_PROXY_URL`, `BOT_AI_MODEL` | As for the `parity` brain; intake runs on the proxy. |
+
+Each conversation's state (stage, transcript, draft ticket, shared report)
+lives under `<state dir>/feedback/`, so a restart resumes where it was. The
+model only writes replies and ticket fields; when to ask for client info and
+when to file are decided by `brains/feedback.mjs`. Other transports do not
+carry the client-info cards, so this brain only runs on the T3ams transport.
+
 ## Operator context and persona
 
 The generated facts describe the running configuration; they are not a

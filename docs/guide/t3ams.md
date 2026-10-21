@@ -86,6 +86,20 @@ under `t3ams-kv/`. Losing it is like wiping a device: the bot comes back as a
 new MLS device and has to be re-admitted to its conversations. Keep it private
 and persistent, and treat backups as secrets.
 
+## Asking a person for client info
+
+A T3ams agent can ask the person it is talking to for their client info —
+what the app's Debug panel shows: versions, network, host capabilities, app
+state, recent journeys and the last log lines, redacted on the device. The
+runtime exposes `requestDiagnostics(route, reason)`; the app renders the
+request as a consent card with Preview / Share / Not now, and a shared report
+arrives as an `onDiagnostics` event (`DiagnosticsReport`) instead of a
+message. The `feedback` brain uses this to attach client info to the issues
+it files; see `docs/guide/brains.md`.
+
+A reply in a channel thread the agent has already answered in reaches it
+without an @mention, so the back-and-forth of an intake works in threads.
+
 ## Not supported yet
 
 - `--brain bridge` (the HTTP harness): use a direct engine, `BOT_AI_CMD`, or `echo`.

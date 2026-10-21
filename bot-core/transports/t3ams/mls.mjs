@@ -30,6 +30,9 @@ import { DEFAULT_NETWORK_PROFILE, configuredNetworkProfile, peopleEndpointsFor }
 import { deriveSr25519PairFromSeed } from "../../vendor/lib/wallet-keys.mjs";
 import { botSeedFromHex, deriveT3amsIdentityFromSeed } from "./t3ams-identity.mjs";
 import { createT3amsFileKv } from "./file-kv.mjs";
+import { createFeedbackAgent } from "../../brains/feedback.mjs";
+import { createGithubIssues, readGithubToken } from "../../lib/github-issues.mjs";
+import { createParityLlm, readParityProxyKey } from "../../lib/parity-llm.mjs";
 import { createT3amsStatementTransport } from "./statement-transport.mjs";
 
 const env = process.env;
@@ -87,10 +90,35 @@ const replyChunkBytes = numberEnv("BOT_REPLY_CHUNK_BYTES", 4000, { min: 128, max
 // ---------- brain ----------
 
 const brain = (env.BOT_BRAIN ?? "echo").trim().toLowerCase();
-if (brain === "bridge") die("BOT_BRAIN=bridge is not supported by the MLS T3ams transport yet; use a direct engine (claude, codex, opencode, kimi), BOT_AI_CMD, or echo.");
+if (brain === "bridge") die("BOT_BRAIN=bridge is not supported by the MLS T3ams transport yet; use a direct engine (claude, codex, opencode, kimi, parity), feedback, BOT_AI_CMD, or echo.");
 const customCmd = (env.BOT_AI_CMD ?? "").trim();
-const engine = customCmd ? RUNNERS.custom : resolveEngine(brain);
-if (engine == null && brain !== "echo") die("BOT_BRAIN must be echo, claude, codex, opencode or kimi");
+const feedbackBrain = brain === "feedback";
+const engine = customCmd ? RUNNERS.custom : feedbackBrain ? null : resolveEngine(brain);
+if (engine == null && brain !== "echo" && !feedbackBrain) die("BOT_BRAIN must be echo, claude, codex, opencode, kimi, parity or feedback");
+
+// The feedback agent: intake on Parity's LLM proxy, client info from the app,
+// issues on GitHub. Keys come from files (BOT_PARITY_PROXY_KEYFILE,
+// BOT_GITHUB_TOKEN_FILE), never from the environment.
+let feedback = null;
+if (feedbackBrain) {
+  const key = readParityProxyKey(env.BOT_PARITY_PROXY_KEYFILE || null);
+  if (key == null) die("BOT_BRAIN=feedback needs a Parity proxy key in ~/.llm-proxy/key or BOT_PARITY_PROXY_KEYFILE");
+  const repo = (env.BOT_FEEDBACK_REPO ?? "").trim();
+  let github = null;
+  if (repo) {
+    const token = readGithubToken(env.BOT_GITHUB_TOKEN_FILE || null);
+    if (token == null) die("BOT_FEEDBACK_REPO is set but no GitHub token was found in BOT_GITHUB_TOKEN_FILE or ~/.config/pca/github-token");
+    github = createGithubIssues({ token, repo, ...(env.BOT_GITHUB_API_URL ? { apiUrl: env.BOT_GITHUB_API_URL } : {}) });
+  } else {
+    log("FEEDBACK_NO_REPO", { note: "BOT_FEEDBACK_REPO is unset; the agent will draft issues but cannot file them" });
+  }
+  feedback = createFeedbackAgent({
+    llm: createParityLlm({ key, ...(env.BOT_PARITY_PROXY_URL ? { baseUrl: env.BOT_PARITY_PROXY_URL } : {}), ...(env.BOT_AI_MODEL ? { model: env.BOT_AI_MODEL } : {}) }),
+    github,
+    stateDir: path.join(stateDir, "feedback"),
+    log,
+  });
+}
 let toolPolicy;
 try {
   toolPolicy = toolPolicyFromEnvironment(env);
@@ -182,8 +210,25 @@ const agentRuntime = engine == null ? null : createAgentRuntime({
   log,
 });
 
+const runFeedbackActions = async (chatKey, route, actions) => {
+  for (const action of actions) {
+    if (action.say != null) await sendText(chatKey, action.say, route);
+    if (action.requestDiagnostics != null) {
+      await agent.requestDiagnostics(route, action.requestDiagnostics);
+      log("T3AMS_DIAGNOSTICS_REQUESTED", { to: chatKey });
+    }
+  }
+};
+
 const answer = (chatKey, route, message) => {
   routes.set(chatKey, route);
+  if (feedback != null) {
+    beginTurn(chatKey);
+    feedback.onMessage(chatKey, { ...message, source: route.kind === "dm" ? "direct message" : "channel thread" })
+      .then((actions) => runFeedbackActions(chatKey, route, actions))
+      .catch((error) => log("T3AMS_TURN_FAILED", { to: chatKey, error: String(error?.message ?? error) }));
+    return;
+  }
   if (agentRuntime == null) {
     sendText(chatKey, message.text, route).catch((error) => log("T3AMS_REPLY_FAILED", { to: chatKey, error: String(error?.message ?? error) }));
     return;
@@ -227,6 +272,15 @@ agent = await runtime.startT3amsAgent({
     const route = { kind: "dm", peerXid: dm.peerXid };
     answer(dmKey(dm.peerXid), route, { text: dm.text, senderName: dm.senderName });
   },
+  onDiagnostics(event) {
+    const chatKey = event.route.kind === "dm" ? dmKey(event.route.peerXid) : threadKey(event.route);
+    log("T3AMS_DIAGNOSTICS_RECEIVED", { from: event.senderXid, to: chatKey, logLines: event.report.logs.length });
+    if (feedback == null) return;
+    routes.set(chatKey, event.route);
+    feedback.onDiagnostics(chatKey, event.report)
+      .then((actions) => runFeedbackActions(chatKey, event.route, actions))
+      .catch((error) => log("T3AMS_TURN_FAILED", { to: chatKey, error: String(error?.message ?? error) }));
+  },
   onWorkspaceInvite(invite) {
     const trusted = isAllowed(invite.inviterXid) || (invite.ownerXid != null && isAllowed(invite.ownerXid));
     const accept = invite.asAgent && autoAcceptWorkspaces && trusted;
@@ -235,7 +289,7 @@ agent = await runtime.startT3amsAgent({
   },
 });
 
-log("T3AMS_READY", { username, xid: agent.xidHex, namespace, brain: customCmd ? "custom" : brain });
+log("T3AMS_READY", { username, xid: agent.xidHex, namespace, brain: customCmd ? "custom" : brain, ...(feedback != null ? { repo: env.BOT_FEEDBACK_REPO || null } : {}) });
 if (env.BOT_T3AMS_PUBLISH_IDENTITY !== "0") {
   // Peers treat an account as MLS-capable only once its key attestation is on
   // the T3ams registry; until then they keep it on the legacy carrier.

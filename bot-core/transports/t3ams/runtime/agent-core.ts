@@ -69,6 +69,12 @@ import {
   startMlsDeviceMembership,
 } from "@features/groups/messaging/mls-device-membership.ts";
 import type { ChatMessage } from "@features/messaging/domain/message.ts";
+import {
+  diagnosticsRequestBody,
+  parseDiagnosticsReportBody,
+  parseDiagnosticsRequestBody,
+  type DiagnosticsReport,
+} from "@features/diagnostics/domain/report.ts";
 import { mayApplyMlsCommit } from "@features/messaging/domain/mls-commit-authority.ts";
 import { deliveryErrorFor } from "@features/messaging/services/delivery-error.ts";
 import { startJoinBackfill } from "@features/messaging/services/join-backfill.ts";
@@ -118,6 +124,8 @@ export interface T3amsAgentOptions {
   readonly deriveEntropy: (context: Uint8Array) => Promise<Uint8Array>;
   readonly onMention: (event: T3amsMention) => void;
   readonly onDirectMessage: (event: T3amsDirectMessage) => void;
+  /** A person shared their client info after `requestDiagnostics`. */
+  readonly onDiagnostics?: (event: T3amsDiagnostics) => void;
   /** Return true to join the workspace. Agent invites name the owner, channels and permissions. */
   readonly onWorkspaceInvite: (invite: T3amsWorkspaceInvite) => boolean;
   readonly log?: (event: string, fields?: Record<string, unknown>) => void;
@@ -151,6 +159,20 @@ export interface T3amsDirectMessage {
   readonly workspaceAllowsDm: boolean;
 }
 
+/** Where a conversation with the bot lives: a DM, or a channel thread. */
+export type T3amsRoute =
+  | { readonly kind: "dm"; readonly peerXid: string }
+  | { readonly kind: "thread"; readonly wsId: string; readonly channelId: string; readonly threadRootId: string };
+
+export interface T3amsDiagnostics {
+  readonly route: T3amsRoute;
+  readonly senderXid: string;
+  readonly senderName: string;
+  readonly report: DiagnosticsReport;
+}
+
+export type { DiagnosticsReport };
+
 export interface T3amsWorkspaceInvite {
   readonly wsId: string;
   readonly workspaceName: string;
@@ -169,6 +191,8 @@ export interface T3amsAgent {
   react(wsId: string, channelId: string, messageId: string, emoji: string): Promise<void>;
   channelTyping(wsId: string, channelId: string): void;
   dmTyping(peerXid: string): void;
+  /** Ask the person in `route` to share their client info; the app shows a consent card. */
+  requestDiagnostics(route: T3amsRoute, reason: string): Promise<void>;
   /** Publish the bot's MLS-capable key attestation on the T3ams registry if it is missing or stale. */
   publishIdentity(): Promise<string>;
   stop(): void;
@@ -332,11 +356,27 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
   const allDocs = (): WorkspaceStateDoc[] =>
     Object.values(useWorkspacesStore.getState().workspaces).map((record) => record.doc);
 
+  // Threads the bot answered in: a follow-up there is addressed to it even
+  // without an @mention, the way people talk to a bot in a thread.
+  const ownThreads = new Set<string>();
   const onChannelMessage = (wsId: string, entry: ChannelRegistryEntry, message: ChatMessage): void => {
-    if (message.mentions?.includes(selfXid) !== true) return;
+    const threadRootId = message.threadRootId ?? message.id;
+    const inOwnThread = message.threadRootId != null && ownThreads.has(`${entry.idHex}:${message.threadRootId}`);
+    if (message.mentions?.includes(selfXid) !== true && !inOwnThread) return;
     const doc = workspaceDoc(wsId);
     if (!agentsEnabled(doc) || !agentAllowedInChannel(doc, selfXid, entry.idHex)) return;
     if (message.timestamp < channelAccessSince(doc, selfXid, entry.idHex)) return;
+    if (parseDiagnosticsRequestBody(message.body) != null) return;
+    const report = parseDiagnosticsReportBody(message.body);
+    if (report != null) {
+      options.onDiagnostics?.({
+        route: { kind: "thread", wsId, channelId: entry.idHex, threadRootId },
+        senderXid: message.senderXid,
+        senderName: senderNameIn([doc], message),
+        report,
+      });
+      return;
+    }
     options.onMention({
       wsId,
       workspaceName: doc?.name ?? "",
@@ -369,6 +409,17 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
           onChannelMessage(channel.wsId, channel.entry, message);
         } else if (dmChannelOf(message.senderXid) === slotHex) {
           const docs = allDocs();
+          if (parseDiagnosticsRequestBody(message.body) != null) continue;
+          const report = parseDiagnosticsReportBody(message.body);
+          if (report != null) {
+            options.onDiagnostics?.({
+              route: { kind: "dm", peerXid: message.senderXid },
+              senderXid: message.senderXid,
+              senderName: senderNameIn(docs, message),
+              report,
+            });
+            continue;
+          }
           options.onDirectMessage({
             peerXid: message.senderXid,
             messageId: message.id,
@@ -437,7 +488,7 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
     store.updateDeliveryStatus(prepared.channelHex, prepared.message.id, "sent");
   };
 
-  return {
+  const agent: T3amsAgent = {
     xidHex: selfXid,
     async replyInThread(wsId, channelId, threadRootId, text) {
       const doc = workspaceDoc(wsId);
@@ -445,6 +496,7 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
         throw new AgentRefusedError("the workspace's agent rules do not allow a reply in this channel now");
       }
       const entry = channelEntry(wsId, channelId);
+      ownThreads.add(`${channelId}:${threadRootId}`);
       await submitTracked(
         await prepareChannelSend({
           identity,
@@ -481,6 +533,11 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
         senderXid: selfXid,
       });
     },
+    async requestDiagnostics(route, reason) {
+      const body = diagnosticsRequestBody({ reason });
+      if (route.kind === "dm") await agent.replyInDm(route.peerXid, body);
+      else await agent.replyInThread(route.wsId, route.channelId, route.threadRootId, body);
+    },
     channelTyping(wsId, channelId) {
       sendChannelTyping({ identity, wsId, entry: channelEntry(wsId, channelId) });
     },
@@ -498,4 +555,5 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
       stopMlsRuntime(accountAddress);
     },
   };
+  return agent;
 }
