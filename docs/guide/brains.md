@@ -18,11 +18,36 @@ authenticate; container-scoped native file tools and Bash can access it.
 | `codex` | the `codex` CLI | OpenAI models | ChatGPT / Codex login |
 | `opencode` | the `opencode` CLI | many providers via `--model provider/model` | `opencode auth login` |
 | `kimi` | the `kimi` CLI | Kimi (Moonshot) models via `-m <alias>` | `kimi login` |
+| `parity` | bot-core's own `brains/parity-proxy.mjs` | every model on Parity's LLM proxy (`parity/…` on Parity GPUs, `openrouter/…`) | a proxy key in `~/.llm-proxy/env.sh` ([parity-ai-user-setup](https://github.com/paritytech/parity-ai-user-setup)) |
 | `echo` | bot-core itself (repeats the message) | — | none |
 | `bridge` | an agent framework over the HTTP bridge | — | the framework's |
 
 `opencode` is the many-models path — one engine reaches Anthropic, OpenAI,
 Google, xAI, OpenRouter, local models, and more.
+
+## The `parity` brain
+
+`--brain parity` talks to Parity's LLM proxy directly: one HTTPS call per turn
+to `/v1/chat/completions`, the conversation kept on disk under the workspace
+(`.pca/parity-sessions/`), so the bot remembers a chat the way the CLI brains
+do with `--resume`. It needs no agent CLI and has no tools: it is a chat
+brain. `--model` picks any id the proxy serves; the default is
+`parity/deepseek-v4.1-flash`, which runs on Parity's own GPU and costs nothing.
+
+The key comes from the file the parity-ai-user-setup script writes
+(`~/.llm-proxy/env.sh`), or from `BOT_PARITY_PROXY_KEYFILE`; the proxy URL
+from `BOT_PARITY_PROXY_URL` (default `https://ai.labs.paritytech.io/v1`).
+pca deliberately strips secret-looking variables from a brain's environment,
+so the key is read from a file, never passed through it.
+
+`brains/parity-proxy.mjs` is also the smallest example of **bringing your own
+harness**: a brain is a process that gets the prompt as its last argument,
+plus `--resume <id>`, `--model <name>` and `--append-system-prompt <text>`
+(pca's operator context and persona), and prints claude-shaped stream-json —
+an `init` line with the session id, optional `stream_event` text deltas, an
+`assistant` message and a `result`. Point `BOT_AI_CMD` at any program that
+speaks that and pca runs it as the brain, with the same session resume,
+placeholders, live replies and in-chat commands.
 
 ## Operator context and persona
 

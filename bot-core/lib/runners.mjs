@@ -207,6 +207,10 @@ const opencodePermissions = (policy, { workingDirectory = "/workspace", attachme
 
 export const assertEngineToolPolicy = (engineName, policyInput = DEFAULT_TOOL_POLICY) => {
   const policy = createToolPolicy(policyInput);
+  if (engineName === "parity") {
+    if (policy.capabilities.length) throw new ToolPolicyError("The parity brain is chat only: it has no tools to grant.");
+    return policy;
+  }
   if (!["claude", "codex", "opencode", "kimi", "custom"].includes(engineName)) {
     throw new ToolPolicyError(`No direct-agent tool-policy adapter exists for "${engineName}".`);
   }
@@ -656,7 +660,25 @@ const kimi = {
 // the same format.
 const custom = { ...claude, command: null };
 
-export const RUNNERS = { claude, codex, opencode, kimi, custom };
-export const ENGINES = ["claude", "codex", "opencode", "kimi"]; // user-selectable
+// ---- parity (Parity's LLM proxy, no agent CLI) -----------------------------
+// brains/parity-proxy.mjs calls https://ai.labs.paritytech.io directly and
+// speaks claude-shaped stream-json, so it shares claude's parser. Chat only:
+// it has no tools, so the only policy it accepts is the empty one.
+const parity = {
+  command: process.execPath,
+  effortLevels: null,
+  buildArgs({ prompt, model, resume, operatorContext = "" }) {
+    const args = [new URL("../brains/parity-proxy.mjs", import.meta.url).pathname];
+    if (resume) args.push("--resume", resume);
+    if (model) args.push("--model", model);
+    if (operatorContext) args.push("--append-system-prompt", operatorContext);
+    args.push("--", prompt);
+    return args;
+  },
+  parseEvent: claude.parseEvent,
+};
+
+export const RUNNERS = { claude, codex, opencode, kimi, parity, custom };
+export const ENGINES = ["claude", "codex", "opencode", "kimi", "parity"]; // user-selectable
 
 export const resolveEngine = (name) => RUNNERS[name] ?? null;

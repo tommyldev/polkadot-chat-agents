@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { RUNNERS, toolActionTitle, resolveEngine, ENGINES, toolPolicyEnforcement } from "../lib/runners.mjs";
+import { RUNNERS, toolActionTitle, resolveEngine, ENGINES, toolPolicyEnforcement, assertEngineToolPolicy } from "../lib/runners.mjs";
 
 const policy = (capabilities = [], scope = "workspace") => ({ capabilities, scope });
 
@@ -35,9 +35,19 @@ test("toolActionTitle renders known tools as one-liners", () => {
 });
 
 test("resolveEngine / ENGINES", () => {
-  assert.deepEqual(ENGINES, ["claude", "codex", "opencode", "kimi"]);
+  assert.deepEqual(ENGINES, ["claude", "codex", "opencode", "kimi", "parity"]);
   assert.ok(resolveEngine("claude"));
   assert.equal(resolveEngine("gemini"), null);
+});
+
+// ---- parity ----------------------------------------------------------------
+test("parity runs bot-core's own proxy brain with resume, model and operator context", () => {
+  const args = RUNNERS.parity.buildArgs({ prompt: "hi", resume: "s1", model: "parity/deepseek-v4.1-flash", operatorContext: "ctx" });
+  assert.equal(RUNNERS.parity.command, process.execPath);
+  assert.match(args[0], /brains\/parity-proxy\.mjs$/);
+  assert.deepEqual(args.slice(1), ["--resume", "s1", "--model", "parity/deepseek-v4.1-flash", "--append-system-prompt", "ctx", "--", "hi"]);
+  assert.deepEqual(RUNNERS.parity.parseEvent({ type: "system", subtype: "init", session_id: "s1" }), [{ kind: "started", sessionId: "s1" }]);
+  assert.throws(() => assertEngineToolPolicy("parity", { capabilities: ["read"] }), /chat only/);
 });
 
 // ---- claude ----------------------------------------------------------------

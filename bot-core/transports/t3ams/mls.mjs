@@ -173,6 +173,11 @@ const agentRuntime = engine == null ? null : createAgentRuntime({
     personaPath: path.join(aiWorkspace, "PERSONA.md"),
   },
   chat: { sendText, deliver: sendText, beginTurn },
+  // The parity brain reads its key from a file, never from the environment.
+  agentEnv: {
+    ...(env.BOT_PARITY_PROXY_URL ? { PARITY_PROXY_BASE_URL: env.BOT_PARITY_PROXY_URL } : {}),
+    ...(env.BOT_PARITY_PROXY_KEYFILE ? { PARITY_PROXY_KEYFILE: env.BOT_PARITY_PROXY_KEYFILE } : {}),
+  },
   username,
   log,
 });
