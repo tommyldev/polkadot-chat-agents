@@ -145,6 +145,18 @@ export interface T3amsMention {
   readonly timestamp: number;
   readonly canReply: boolean;
   readonly canReact: boolean;
+  /** False for a follow-up in a thread the bot answered in, which arrives without an @mention. */
+  readonly mentioned: boolean;
+  /** What was said before the mention: the thread it is in, or the channel's
+   *  latest top-level messages. Oldest first; the mention itself is not included. */
+  readonly history: readonly T3amsHistoryEntry[];
+}
+
+export interface T3amsHistoryEntry {
+  readonly senderName: string;
+  readonly text: string;
+  readonly timestamp: number;
+  readonly mine: boolean;
 }
 
 export interface T3amsDirectMessage {
@@ -292,7 +304,7 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
   for (const result of results ?? []) {
     if (result.status === "rejected") log("T3AMS_STORE_INIT_FAILED", { reason: String(result.reason) });
   }
-  if (useProfileStore.getState().displayName.trim() === "") {
+  if (useProfileStore.getState().displayName.trim() !== options.displayName) {
     useProfileStore.setState({ displayName: options.displayName });
   }
 
@@ -359,10 +371,28 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
   // Threads the bot answered in: a follow-up there is addressed to it even
   // without an @mention, the way people talk to a bot in a thread.
   const ownThreads = new Set<string>();
-  const onChannelMessage = (wsId: string, entry: ChannelRegistryEntry, message: ChatMessage): void => {
+  const HISTORY_LIMIT = 30;
+  const historyBefore = (doc: WorkspaceStateDoc | null, messages: readonly ChatMessage[], message: ChatMessage): T3amsHistoryEntry[] => {
+    const rootId = message.threadRootId;
+    const inScope = (m: ChatMessage): boolean =>
+      rootId == null ? m.threadRootId == null : m.id === rootId || m.threadRootId === rootId;
+    const entries: T3amsHistoryEntry[] = [];
+    for (const m of messages) {
+      if (m.id === message.id || m.timestamp > message.timestamp) continue;
+      if (m.system === true || m.deletedAt != null || m.undecryptable === true || !inScope(m)) continue;
+      if (parseDiagnosticsRequestBody(m.body) != null || parseDiagnosticsReportBody(m.body) != null) continue;
+      if (m.body.trim() === "") continue;
+      entries.push({ senderName: m.mine ? options.displayName : senderNameIn([doc], m), text: m.body, timestamp: m.timestamp, mine: m.mine });
+    }
+    entries.sort((a, b) => a.timestamp - b.timestamp);
+    return entries.slice(-HISTORY_LIMIT);
+  };
+
+  const onChannelMessage = (wsId: string, entry: ChannelRegistryEntry, message: ChatMessage, messages: readonly ChatMessage[]): void => {
     const threadRootId = message.threadRootId ?? message.id;
     const inOwnThread = message.threadRootId != null && ownThreads.has(`${entry.idHex}:${message.threadRootId}`);
-    if (message.mentions?.includes(selfXid) !== true && !inOwnThread) return;
+    const mentioned = message.mentions?.includes(selfXid) === true;
+    if (!mentioned && !inOwnThread) return;
     const doc = workspaceDoc(wsId);
     if (!agentsEnabled(doc) || !agentAllowedInChannel(doc, selfXid, entry.idHex)) return;
     if (message.timestamp < channelAccessSince(doc, selfXid, entry.idHex)) return;
@@ -390,6 +420,8 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
       timestamp: message.timestamp,
       canReply: agentHas(doc, selfXid, "replyWhenMentioned"),
       canReact: agentHas(doc, selfXid, "react"),
+      mentioned,
+      history: historyBefore(doc, messages, message),
     });
   };
 
@@ -406,7 +438,7 @@ export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsA
         if (message.undecryptable === true || message.timestamp < since) continue;
         const channel = channelOfSlot(slotHex);
         if (channel != null) {
-          onChannelMessage(channel.wsId, channel.entry, message);
+          onChannelMessage(channel.wsId, channel.entry, message, messages);
         } else if (dmChannelOf(message.senderXid) === slotHex) {
           const docs = allDocs();
           if (parseDiagnosticsRequestBody(message.body) != null) continue;

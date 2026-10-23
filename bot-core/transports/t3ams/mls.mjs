@@ -260,7 +260,18 @@ agent = await runtime.startT3amsAgent({
     }
     if (!mention.canReply) return;
     const route = { kind: "thread", wsId: mention.wsId, channelId: mention.channelId, threadRootId: mention.threadRootId };
-    answer(threadKey(route), route, { text: mention.text, senderName: mention.senderName });
+    const chatKey = threadKey(route);
+    // The feedback agent files straight from a channel mention and the chat
+    // before it; follow-ups in that thread continue the conversation.
+    if (feedback != null && mention.mentioned) {
+      routes.set(chatKey, route);
+      beginTurn(chatKey);
+      feedback.onMention(chatKey, { text: mention.text, senderName: mention.senderName, senderXid: mention.senderXid, source: `#${mention.channelName}`, history: mention.history })
+        .then((actions) => runFeedbackActions(chatKey, route, actions))
+        .catch((error) => log("T3AMS_TURN_FAILED", { to: chatKey, error: String(error?.message ?? error) }));
+      return;
+    }
+    answer(chatKey, route, { text: mention.text, senderName: mention.senderName });
   },
   onDirectMessage(dm) {
     // A workspace agent answers DMs only where an admin turned them on; a
@@ -277,7 +288,7 @@ agent = await runtime.startT3amsAgent({
     log("T3AMS_DIAGNOSTICS_RECEIVED", { from: event.senderXid, to: chatKey, logLines: event.report.logs.length });
     if (feedback == null) return;
     routes.set(chatKey, event.route);
-    feedback.onDiagnostics(chatKey, event.report)
+    feedback.onDiagnostics(chatKey, event.report, event.senderName)
       .then((actions) => runFeedbackActions(chatKey, event.route, actions))
       .catch((error) => log("T3AMS_TURN_FAILED", { to: chatKey, error: String(error?.message ?? error) }));
   },

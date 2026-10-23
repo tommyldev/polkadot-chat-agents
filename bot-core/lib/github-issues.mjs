@@ -44,6 +44,13 @@ export function createGithubIssues({ token, repo, apiUrl = "https://api.github.c
       const data = await response.json();
       return { number: data.number, url: data.html_url };
     },
+    /** Add a comment to an existing issue. */
+    async comment(number, body) {
+      const response = await fetchFn(`${apiUrl}/repos/${repo}/issues/${number}/comments`, { method: "POST", headers, body: JSON.stringify({ body }) });
+      if (!response.ok) throw new Error(`GitHub answered ${response.status}: ${(await response.text()).slice(0, 300)}`);
+      const data = await response.json();
+      return { url: data.html_url };
+    },
     /** Labels the repo defines, so the agent only applies ones that exist. */
     async labels() {
       const response = await fetchFn(`${apiUrl}/repos/${repo}/labels?per_page=100`, { headers });

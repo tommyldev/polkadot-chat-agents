@@ -143,3 +143,31 @@ test("parseJsonAnswer tolerates fences and prose; clients send what the APIs exp
   assert.equal(JSON.parse(requests[1].init.body).labels[0], "bug");
   assert.throws(() => createGithubIssues({ token: "t", repo: "bad" }), /owner\/name/);
 });
+
+test("feedback agent: a channel mention files from the transcript, then attaches shared client info as a comment", async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pca-feedback-"));
+  const llm = scripted([{ reply: "Sorry about that — filing it now.", ticket }]);
+  const github = fakeGithub();
+  const comments = [];
+  github.comment = async (number, body) => { comments.push({ number, body }); return { url: "c" }; };
+  const agent = createFeedbackAgent({ llm, github, stateDir });
+  const history = [
+    { senderName: "Alice", text: "did you see my reaction?", timestamp: 1_700_000_000_000, mine: false },
+    { senderName: "Bob", text: "no, it's gone after reload", timestamp: 1_700_000_060_000, mine: false },
+  ];
+  let actions = await agent.onMention("t-9", { text: "@t3ams-admin this is broken", senderName: "Bob", senderXid: "bb", source: "#general", history });
+  assert.match(llm.calls[0].messages[0].content, /Recent chat:\nAlice: did you see my reaction\?\nBob: no, it's gone after reload\n\nMention by Bob: @t3ams-admin this is broken/);
+  assert.equal(actions[0].say, "Sorry about that — filing it now.\n\nIssue filed: https://github.com/o/r/issues/7");
+  assert.match(actions[1].requestDiagnostics, /attach it to #7/);
+  assert.match(github.created[0].body, /Chat before the report \(2 messages\)/);
+  assert.match(github.created[0].body, /\*\*Bob:\*\* no, it's gone after reload/);
+  assert.equal(agent.stageOf("t-9"), "filed");
+
+  actions = await agent.onDiagnostics("t-9", report, "Bob");
+  assert.equal(actions[0].say, "Attached your client info to https://github.com/o/r/issues/7. Thanks!");
+  assert.equal(comments[0].number, 7);
+  assert.match(comments[0].body, /Client info shared by Bob \(2 log lines\)/);
+
+  // "thanks" in the thread is not a new report.
+  assert.deepEqual(await agent.onMessage("t-9", { text: "thanks!", senderName: "Bob", senderXid: "bb", source: "#general" }), []);
+});

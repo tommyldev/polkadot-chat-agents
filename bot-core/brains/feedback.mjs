@@ -31,6 +31,10 @@ Do not ask for logs, versions or technical details: the app collects those separ
 
 Answer ONLY with a JSON object: {"reply": "<what to say to the person>", "done": <true when you have everything above>, "ticket": {"title": "<imperative, under 80 chars, e.g. 'Reactions disappear after reload in group chats'>", "summary": "<2-3 sentences>", "steps": ["..."], "expected": "...", "actual": "...", "environment": "<platform, how often, since when>", "area": "<one of: messaging, calls, notifications, identity, accounts, signing, loading, mobile, other>"}}. Fill ticket fields with what you know so far; empty strings or arrays when unknown.`;
 
+const MENTION_SYSTEM = `You are the T3ams feedback agent. T3ams is a private team chat app on Polkadot (workspaces, channels, direct messages, calls, files). Someone in a channel just mentioned you to report a problem — often about what was said just before ("this response sucks", "the call dropped again", "why did this message arrive twice?"). You get the recent chat transcript and the mention. Write a bug report a developer can act on from that alone; do not ask questions.
+
+Answer ONLY with a JSON object: {"reply": "<one sentence to the reporter, under 25 words>", "ticket": {"title": "<imperative, under 80 chars>", "summary": "<2-4 sentences: what went wrong, quoting the relevant chat lines where useful>", "steps": ["..."], "expected": "...", "actual": "...", "environment": "<what the transcript tells you, else empty>", "area": "<one of: messaging, calls, notifications, identity, accounts, signing, loading, mobile, other>"}}. Use empty strings or arrays for what the transcript does not tell you.`;
+
 const CONFIRM_SYSTEM = `You are the T3ams feedback agent. The person has reviewed a draft bug report. Decide what they want from their latest message. Answer ONLY with JSON: {"decision": "file" | "revise" | "cancel", "reply": "<one short sentence>", "ticket": <the ticket with their requested changes applied, same shape as given>}. "file" when they agree (yes, looks good, go ahead...), "revise" when they ask for changes, "cancel" when they do not want an issue after all.`;
 
 const AREA_LABEL = Object.freeze({
@@ -52,8 +56,24 @@ const normalizeTicket = (raw = {}) => {
   return ticket;
 };
 
+const transcriptMarkdown = (history) =>
+  history.map((h) => `${new Date(h.timestamp).toISOString().slice(11, 16)} **${h.senderName}:** ${h.text.replace(/\s+/g, " ").trim()}`).join("\n");
+
+/** The client info a reporter shared, as an issue comment. */
+export function renderReportComment(report, reporter) {
+  return (
+    `Client info shared by ${reporter} (${report.logs.length} log lines${report.truncated ? ", truncated" : ""}):\n\n` +
+    `**App**\n\n${Object.entries(report.app).map(([k, v]) => `- ${k}: ${v}`).join("\n")}\n\n` +
+    (report.capabilities ? `**Capabilities**\n\n\`\`\`\n${report.capabilities}\n\`\`\`\n\n` : "") +
+    `<details><summary>App state, journeys and logs</summary>\n\n` +
+    `**App state**\n\n\`\`\`json\n${JSON.stringify(report.appState, null, 2)}\n\`\`\`\n\n` +
+    `**Journeys**\n\n${report.journeys.map((j) => `- ${j}`).join("\n") || "_none_"}\n\n` +
+    `**Logs**\n\n\`\`\`\n${report.logs.join("\n")}\n\`\`\`\n\n</details>`
+  );
+}
+
 /** Markdown in the order of .github/ISSUE_TEMPLATE/bug_report.yml. */
-export function renderIssue(ticket, { reporter, report = null, source }) {
+export function renderIssue(ticket, { reporter, report = null, source, history = [] }) {
   const steps = ticket.steps.length ? ticket.steps.map((step, i) => `${i + 1}. ${step}`).join("\n") : "_Not known yet._";
   const sections = [
     `### Summary\n\n${ticket.summary || ticket.title}`,
@@ -75,7 +95,9 @@ export function renderIssue(ticket, { reporter, report = null, source }) {
   } else {
     sections.push("### Logs or Screenshots\n\n_The reporter did not share client info._");
   }
-  sections.push(`### Additional Context\n\nReported by ${reporter} via the T3ams feedback agent (${source}).`);
+  const context = [`Reported by ${reporter} via the T3ams feedback agent (${source}).`];
+  if (history.length) context.push(`<details><summary>Chat before the report (${history.length} messages)</summary>\n\n${transcriptMarkdown(history)}\n\n</details>`);
+  sections.push(`### Additional Context\n\n${context.join("\n\n")}`);
   return sections.join("\n\n");
 }
 
@@ -132,6 +154,8 @@ export function createFeedbackAgent({ llm, github, stateDir, log = () => {} }) {
       const actions = [];
       try {
         if (state.stage === "filed") {
+          // In a channel thread the issue is filed; "thanks" needs no answer. A DM starts a new report.
+          if (message.source !== "direct message") { save(key, state); return actions; }
           state.stage = "intake"; state.history = []; state.ticket = normalizeTicket(); state.report = null; state.filed = null;
         }
         if (state.stage === "intake") {
@@ -183,9 +207,64 @@ export function createFeedbackAgent({ llm, github, stateDir, log = () => {} }) {
       return actions;
     },
 
-    /** The person shared their client info. */
-    async onDiagnostics(key, report) {
+    /**
+     * Mentioned in a channel: file right away from the transcript and the
+     * complaint, then invite the reporter to attach their client info.
+     * @param {{text: string, senderName: string, senderXid: string, source: string, history: readonly {senderName:string,text:string,timestamp:number,mine:boolean}[]}} mention
+     */
+    async onMention(key, mention) {
       const state = load(key);
+      const actions = [];
+      try {
+        const transcript = mention.history.length
+          ? `Recent chat:\n${mention.history.map((h) => `${h.senderName}: ${h.text}`).join("\n")}\n\n`
+          : "";
+        const answer = parseJsonAnswer(await llm.complete({
+          system: MENTION_SYSTEM,
+          messages: [{ role: "user", content: `${transcript}Mention by ${mention.senderName}: ${mention.text}` }],
+          json: true,
+        }));
+        state.ticket = normalizeTicket(answer.ticket);
+        state.history = [];
+        state.report = null;
+        const reply = typeof answer.reply === "string" && answer.reply.trim() ? answer.reply.trim() : "Thanks, noted.";
+        if (github == null) {
+          state.stage = "confirm";
+          actions.push({ say: `${reply}\n\n${draftText(state.ticket)}` });
+        } else {
+          labelsAvailable ??= await github.labels();
+          const filed = await github.create({
+            title: state.ticket.title || "Problem reported in T3ams",
+            body: renderIssue(state.ticket, { reporter: mention.senderName, source: mention.source, history: mention.history }),
+            labels: issueLabels(state.ticket, labelsAvailable),
+          });
+          state.stage = "filed"; state.filed = filed;
+          log("FEEDBACK_ISSUE_FILED", { key, number: filed.number, url: filed.url });
+          actions.push({ say: `${reply}\n\nIssue filed: ${filed.url}` });
+          actions.push({ requestDiagnostics: `If you can, share your client info and I'll attach it to #${filed.number} — it helps the team reproduce this.` });
+        }
+      } catch (error) {
+        log("FEEDBACK_TURN_FAILED", { key, stage: "mention", error: String(error?.message ?? error) });
+        actions.push({ say: "Sorry, I couldn't file that right now. Could you try again in a moment?" });
+      }
+      save(key, state);
+      return actions;
+    },
+
+    /** The person shared their client info. */
+    async onDiagnostics(key, report, senderName = "the reporter") {
+      const state = load(key);
+      // After a quick filing from a channel mention: attach it to that issue.
+      if (state.stage === "filed" && state.filed != null && github != null) {
+        try {
+          await github.comment(state.filed.number, renderReportComment(report, senderName));
+          log("FEEDBACK_REPORT_ATTACHED", { key, number: state.filed.number });
+          return [{ say: `Attached your client info to ${state.filed.url}. Thanks!` }];
+        } catch (error) {
+          log("FEEDBACK_TURN_FAILED", { key, stage: "attach", error: String(error?.message ?? error) });
+          return [{ say: "Thanks — I couldn't attach that to the issue right now, but the report itself is filed." }];
+        }
+      }
       state.report = report;
       if (state.stage === "intake" || state.stage === "diagnostics") state.stage = "confirm";
       save(key, state);

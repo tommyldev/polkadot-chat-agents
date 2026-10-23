@@ -61,6 +61,13 @@ and log lines — redacted on their device, never key material, message text or
 other people's names) and share it or decline. The agent then shows the issue
 it would file and files it when they say yes, replying with the link.
 
+Mentioned in a channel (`@t3ams-admin this response is wrong`), the agent
+skips the interview: it files right away from the complaint and the chat
+before it (the thread, or the channel's last 30 messages, quoted in a
+collapsed block), replies with the link in the mention's thread, and offers
+the client-info card; a shared report is attached to the issue as a comment.
+Follow-ups in that thread reach the agent without another @mention.
+
 Issues follow `.github/ISSUE_TEMPLATE/bug_report.yml` of the target repo
 (Summary, Steps to Reproduce, Expected, Actual, Environment, Logs in a
 collapsed block, Additional Context) and carry `bug`, `lives-in:t3ams` and an
