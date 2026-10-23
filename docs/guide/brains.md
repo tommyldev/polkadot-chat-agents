@@ -81,6 +81,8 @@ Configuration, all read from files or plain settings:
 | `BOT_GITHUB_TOKEN_FILE` | File holding a token with `issues: write` on that repo (default `~/.config/pca/github-token`). |
 | `BOT_PARITY_PROXY_KEYFILE`, `BOT_PARITY_PROXY_URL`, `BOT_AI_MODEL` | As for the `parity` brain; intake runs on the proxy. |
 
+Any OpenAI-compatible endpoint works in place of the proxy: e.g. OpenRouter with `BOT_PARITY_PROXY_URL=https://openrouter.ai/api/v1`, the key in `BOT_PARITY_PROXY_KEYFILE` and `BOT_AI_MODEL=deepseek/deepseek-v4.1-flash`.
+
 Each conversation's state (stage, transcript, draft ticket, shared report)
 lives under `<state dir>/feedback/`, so a restart resumes where it was. The
 model only writes replies and ticket fields; when to ask for client info and
