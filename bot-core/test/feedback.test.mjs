@@ -42,66 +42,87 @@ function scripted(answers) {
 
 const fakeGithub = () => {
   const created = [];
-  return { repo: "o/r", created, labels: async () => ["bug", "lives-in:t3ams", "area:messaging"], create: async (issue) => { created.push(issue); return { number: 7, url: "https://github.com/o/r/issues/7" }; } };
+  const comments = [];
+  return {
+    repo: "o/r", created, comments,
+    labels: async () => ["bug", "lives-in:t3ams", "area:messaging"],
+    create: async (issue) => { created.push(issue); return { number: 7, url: "https://github.com/o/r/issues/7" }; },
+    comment: async (number, body) => { comments.push({ number, body }); return { url: "c" }; },
+  };
 };
+const dm = (text, senderName = "Tommy") => ({ text, senderName, senderXid: "aa", source: "direct message" });
 
-test("feedback agent: intake → client info → confirm → filed, with state on disk", async () => {
+test("feedback agent: a DM asks at most one question, files, then attaches shared client info", async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pca-feedback-"));
+  const secondQuestionNeverAsked = { reply: "Does it fail every time, and on which device?", done: false, ticket };
   const llm = scripted([
-    { reply: "Sorry about that. Where does it happen, and on which device?", done: false, ticket: { title: "Reactions vanish", area: "messaging" } },
-    { reply: "Thanks, that's everything I need.", done: true, ticket },
-    { decision: "file", reply: "Filing.", ticket },
+    { reply: "Where does it happen?", done: false, ticket: { title: "Reactions vanish", area: "messaging" } },
+    secondQuestionNeverAsked,
   ]);
   const github = fakeGithub();
   const agent = createFeedbackAgent({ llm, github, stateDir });
 
-  let actions = await agent.onMessage("dm-1", { text: "my reactions keep disappearing", senderName: "Tommy", senderXid: "aa", source: "direct message" });
-  assert.deepEqual(actions, [{ say: "Sorry about that. Where does it happen, and on which device?" }]);
+  let actions = await agent.onMessage("dm-1", dm("my reactions keep disappearing"));
+  assert.deepEqual(actions, [{ say: "Where does it happen?" }]);
   assert.equal(agent.stageOf("dm-1"), "intake");
   assert.match(llm.calls[0].messages[0].content, /^Tommy: my reactions/);
 
-  actions = await agent.onMessage("dm-1", { text: "group chats on desktop, every time, since last week", senderName: "Tommy", senderXid: "aa", source: "direct message" });
-  assert.equal(actions[0].say, "Thanks, that's everything I need.");
-  assert.match(actions[1].requestDiagnostics, /client info/);
-  assert.equal(agent.stageOf("dm-1"), "diagnostics");
-
   // A restart in the middle keeps the conversation.
   const again = createFeedbackAgent({ llm, github, stateDir });
-  actions = await again.onDiagnostics("dm-1", report);
-  assert.match(actions[0].say, /t3ams 0\.9\.1 on paseo-next-v2, 2 log lines/);
-  assert.match(actions[0].say, /\*\*Reactions vanish after reload\*\*/);
-  assert.equal(again.stageOf("dm-1"), "confirm");
-
-  actions = await again.onMessage("dm-1", { text: "yes please", senderName: "Tommy", senderXid: "aa", source: "direct message" });
+  actions = await again.onMessage("dm-1", dm("in group chats"));
   assert.equal(actions[0].say, "Filed: https://github.com/o/r/issues/7\n\nThanks Tommy — the team will take it from here.");
+  assert.match(actions[1].requestDiagnostics, /attach it to #7/);
+  assert.equal(actions.length, 2);
   assert.equal(again.stageOf("dm-1"), "filed");
   assert.equal(github.created.length, 1);
   assert.equal(github.created[0].title, "Reactions vanish after reload");
   assert.deepEqual(github.created[0].labels, ["bug", "lives-in:t3ams", "area:messaging"]);
   assert.match(github.created[0].body, /### Steps to Reproduce\n\n1\. Open a group chat\n2\. React/);
-  assert.match(github.created[0].body, /<details><summary>Client info shared by the reporter \(2 log lines\)/);
+  assert.match(github.created[0].body, /_The reporter did not share client info\._/);
   assert.match(github.created[0].body, /Reported by Tommy via the T3ams feedback agent \(direct message\)/);
+
+  actions = await again.onDiagnostics("dm-1", report, "Tommy");
+  assert.equal(actions[0].say, "Attached your client info to https://github.com/o/r/issues/7. Thanks!");
+  assert.match(github.comments[0].body, /Client info shared by Tommy \(2 log lines\)/);
 });
 
-test("feedback agent: declining client info still drafts, revisions re-draft, cancel files nothing", async () => {
+test("feedback agent: a greeting is not a report, one clear sentence files, a nameless sender still gets a reporter", async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pca-feedback-"));
   const llm = scripted([
-    { reply: "Got it.", done: true, ticket },
-    { decision: "revise", reply: "Updated.", ticket: { ...ticket, title: "Reactions vanish after reload in group chats" } },
-    { decision: "cancel", reply: "Okay, nothing filed.", ticket },
+    { reply: "Hi! What went wrong?", done: true, ticket: {} },
+    { reply: "Filed it!", done: true, ticket },
   ]);
   const github = fakeGithub();
   const agent = createFeedbackAgent({ llm, github, stateDir });
-  await agent.onMessage("t-1", { text: "reactions vanish", senderName: "A", senderXid: "aa", source: "channel thread" });
-  let actions = await agent.onMessage("t-1", { text: "I'd rather not share", senderName: "A", senderXid: "aa", source: "channel thread" });
-  assert.match(actions[0].say, /^No problem, I'll file it without client info\./);
-  assert.equal(agent.stageOf("t-1"), "confirm");
-  actions = await agent.onMessage("t-1", { text: "mention group chats in the title", senderName: "A", senderXid: "aa", source: "channel thread" });
-  assert.match(actions[0].say, /\*\*Reactions vanish after reload in group chats\*\*/);
-  actions = await agent.onMessage("t-1", { text: "actually forget it", senderName: "A", senderXid: "aa", source: "channel thread" });
-  assert.equal(actions[0].say, "Okay, nothing filed.");
+  assert.deepEqual(await agent.onMessage("dm-2", dm("hi", "")), [{ say: "Hi! What went wrong?" }]);
   assert.equal(github.created.length, 0);
-  assert.equal(agent.stageOf("t-1"), "filed");
+  const actions = await agent.onMessage("dm-2", dm("reactions vanish after reload in group chats", ""));
+  assert.match(actions[0].say, /^Filed: https:\/\/github\.com\/o\/r\/issues\/7\n\nThanks A T3ams user/);
+  assert.match(github.created[0].body, /Reported by A T3ams user via/);
+  assert.equal(github.created.length, 1);
+});
+
+test("feedback agent: a GitHub failure keeps the report and the next message files it; an old draft on disk files with its client info", async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pca-feedback-"));
+  const github = fakeGithub();
+  const create = github.create;
+  github.create = async () => { throw new Error("GitHub answered 404"); };
+  const events = [];
+  const llm = scripted([{ reply: "ok", done: true, ticket }, { reply: "Anything else?", done: false, ticket }, { reply: "ok", done: false, ticket }]);
+  const agent = createFeedbackAgent({ llm, github, stateDir, log: (e, f) => events.push([e, f]) });
+  let actions = await agent.onMessage("dm-3", dm("reactions vanish"));
+  assert.match(actions[0].say, /couldn't file that on GitHub/);
+  assert.deepEqual(events[0], ["FEEDBACK_TURN_FAILED", { key: "dm-3", stage: "file", error: "GitHub answered 404" }]);
+  assert.equal(agent.stageOf("dm-3"), "intake");
+  github.create = create;
+  actions = await agent.onMessage("dm-3", dm("try again"));
+  assert.match(actions[0].say, /^Filed: /);
+
+  fs.writeFileSync(path.join(stateDir, "dm-4.json"), JSON.stringify({ stage: "confirm", history: [], ticket, report }));
+  actions = await agent.onMessage("dm-4", dm("yes"));
+  assert.match(actions[0].say, /^Filed: /);
+  assert.equal(actions.length, 1);
+  assert.match(github.created[1].body, /Client info shared by the reporter \(2 log lines\)/);
 });
 
 test("feedback agent: a model or GitHub failure is reported, not fatal", async () => {
@@ -146,7 +167,12 @@ test("parseJsonAnswer tolerates fences and prose; clients send what the APIs exp
 
 test("feedback agent: a channel mention files from the transcript, then attaches shared client info as a comment", async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pca-feedback-"));
-  const llm = scripted([{ reply: "Sorry about that — filing it now.", ticket }]);
+  const llm = scripted([
+    { report: true, reply: "Sorry about that — filing it now.", ticket },
+    { reply: "", addition: "" },
+    { reply: "Yes, I'm here.", addition: "" },
+    { reply: "Noted.", addition: "Also happens in DMs." },
+  ]);
   const github = fakeGithub();
   const comments = [];
   github.comment = async (number, body) => { comments.push({ number, body }); return { url: "c" }; };
@@ -168,6 +194,30 @@ test("feedback agent: a channel mention files from the transcript, then attaches
   assert.equal(comments[0].number, 7);
   assert.match(comments[0].body, /Client info shared by Bob \(2 log lines\)/);
 
-  // "thanks" in the thread is not a new report.
-  assert.deepEqual(await agent.onMessage("t-9", { text: "thanks!", senderName: "Bob", senderXid: "bb", source: "#general" }), []);
+  const inThread = (text) => ({ text, senderName: "Bob", senderXid: "bb", source: "channel thread" });
+  assert.deepEqual(await agent.onMessage("t-9", inThread("thanks!")), []);
+  assert.deepEqual(await agent.onMessage("t-9", inThread("you still listening?")), [{ say: "Yes, I'm here." }]);
+  assert.deepEqual(await agent.onMention("t-9", { ...inThread("@t3ams-admin it also happens in DMs"), history }), [{ say: "Added that to https://github.com/o/r/issues/7." }]);
+  assert.equal(comments[1].body, "Bob added:\n\nAlso happens in DMs.");
+  assert.equal(github.created.length, 1);
+});
+
+test("feedback agent: a mention that is not a report gets an answer and no issue; a problem later in that thread is filed", async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pca-feedback-"));
+  const inventedTicket = { title: "Bot does not reply to mentions", summary: "The bot was silent." };
+  const llm = scripted([
+    { report: false, reply: "Alive and well!", ticket: inventedTicket },
+    { reply: "ok", done: true, ticket },
+  ]);
+  const github = fakeGithub();
+  const agent = createFeedbackAgent({ llm, github, stateDir });
+  let actions = await agent.onMention("t-10", { text: "@t3ams-admin you alive or dead?", senderName: "Bob", senderXid: "bb", source: "#general", history: [] });
+  assert.deepEqual(actions, [{ say: "Alive and well!" }]);
+  assert.equal(github.created.length, 0);
+  assert.equal(agent.stageOf("t-10"), "intake");
+
+  actions = await agent.onMessage("t-10", { text: "ok, my reactions vanish after reload", senderName: "Bob", senderXid: "bb", source: "channel thread" });
+  assert.match(actions[0].say, /^Filed: https:\/\/github\.com\/o\/r\/issues\/7/);
+  assert.match(llm.calls[1].messages[0].content, /^Bob: @t3ams-admin you alive or dead\?/);
+  assert.equal(github.created.length, 1);
 });

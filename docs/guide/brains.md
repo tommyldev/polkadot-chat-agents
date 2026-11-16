@@ -52,21 +52,25 @@ placeholders, live replies and in-chat commands.
 ## The `feedback` brain (T3ams only)
 
 `--brain feedback` turns a T3ams agent into a bug-report intake. A person
-describes a problem in a DM or by mentioning the agent in a channel; the agent
-asks what a developer needs (where, expected vs actual, steps, how often,
-platform), one or two questions at a time, then asks for their **client info**.
-T3ams shows that request as a consent card: the person can preview the report
-(app and SDK versions, network, host capabilities, app state, recent journeys
-and log lines — redacted on their device, never key material, message text or
-other people's names) and share it or decline. The agent then shows the issue
-it would file and files it when they say yes, replying with the link.
+describes a problem in a DM or by mentioning the agent in a channel and the
+agent files it, replying with the link. In a DM it asks at most one question,
+and only when it cannot tell what went wrong; it never asks about frequency,
+platform or steps. After filing it offers to attach the person's **client
+info**. T3ams shows that request as a consent card: the person can preview the
+report (app and SDK versions, network, host capabilities, app state, recent
+journeys and log lines — redacted on their device, never key material, message
+text or other people's names) and share it or decline. A shared report is
+attached to the issue as a comment.
 
 Mentioned in a channel (`@t3ams-admin this response is wrong`), the agent
 skips the interview: it files right away from the complaint and the chat
 before it (the thread, or the channel's last 30 messages, quoted in a
 collapsed block), replies with the link in the mention's thread, and offers
 the client-info card; a shared report is attached to the issue as a comment.
-Follow-ups in that thread reach the agent without another @mention.
+A mention that is not a report (a greeting, "you alive?") gets a one-line
+answer and no issue. Follow-ups in that thread reach the agent without
+another @mention: it answers when spoken to, adds new detail about the same
+problem to the issue as a comment, and stays quiet on "thanks".
 
 Issues follow `.github/ISSUE_TEMPLATE/bug_report.yml` of the target repo
 (Summary, Steps to Reproduce, Expected, Actual, Environment, Logs in a

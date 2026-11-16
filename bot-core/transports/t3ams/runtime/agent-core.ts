@@ -58,6 +58,7 @@ import {
 import { startDmRoster } from "@features/dms/messaging/dm-roster.ts";
 import { sendDmTyping } from "@features/dms/messaging/dm-typing.ts";
 import { prepareDmSend } from "@features/dms/messaging/send-dm.ts";
+import { peerLabel, useDmPeersStore } from "@features/dms/store/use-dm-peers-store.ts";
 import { sendGroupControl } from "@features/groups/messaging/group-control.ts";
 import { startGroupRoster } from "@features/groups/messaging/group-roster.ts";
 import {
@@ -254,7 +255,7 @@ function senderNameIn(docs: readonly (WorkspaceStateDoc | null)[], message: Chat
     const name = doc?.members.find((member) => member.xid === message.senderXid)?.name.trim();
     if (name) return name;
   }
-  return "";
+  return peerLabel(useDmPeersStore.getState().peers.find((peer) => peer.xidHex === message.senderXid)).text;
 }
 
 export async function startAgentCore(options: T3amsAgentOptions): Promise<T3amsAgent> {
