@@ -47,6 +47,7 @@ export default defineConfig({
             { text: "Projects & worktrees", link: "/guide/projects" },
             { text: "Files & storage", link: "/guide/files" },
             { text: "T3ams chat", link: "/guide/t3ams" },
+            { text: "T3ams feedback bot", link: "/guide/feedback-bot" },
             { text: "In-chat commands", link: "/guide/commands" },
             { text: "Agent frameworks", link: "/guide/harnesses" },
           ],
